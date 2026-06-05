@@ -1,0 +1,129 @@
+{
+  "schema": "autobuilder.intent_card.v1",
+  "prd_source": "/home/jsy/wintermute/autobuilder/PRD-constellation-burst-builder.md",
+  "intent_slug": "constellation-burst-builder",
+  "root_motivation": "Heavy Rust compile and CPU jobs (autobuilder cold-builds, wake-word retraining) OOM-kill or pin all cores on this no-swap laptop. The user needs a zero-mesh rung today — ssh + sccache + config file — that offloads those jobs to a dedicated cloud box without requiring the full NATS fleet infrastructure. This is the on-ramp that the full constellation fleet will eventually graduate from.",
+  "user_persona": "Joe Yen, solo developer running Claude Code + voice stack on a no-swap laptop; wants to burst heavy Rust compiles and ML CPU jobs to a cheap dedicated Hetzner cloud box without standing up a full fleet.",
+  "unfakeable_metric": {
+    "name": "acceptance_tests_passing_count",
+    "lower_is_better": false,
+    "harness_command": "scripts/run-metrics.sh",
+    "target": 8
+  },
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "level": "MUST",
+      "description": "wm-burst init writes a valid config.toml (remote host, sccache endpoint+bucket, monthly budget cap, optional pod provider) and wm-burst init --show round-trips it; a missing/invalid config produces a clear, actionable error.",
+      "test": "tests/acceptance_ac1.rs"
+    },
+    {
+      "id": "AC2",
+      "level": "MUST",
+      "description": "wm-burst provision emits an idempotent Ansible playbook (or playbook invocation) that takes a fresh host to a ready builder (pinned 1.85+1.88 toolchains, sccache, shared-cache creds) — demonstrated against a real host OR with a dry-run/check-mode pass that succeeds.",
+      "test": "tests/mocks/ac2.rs (mock: playbook generation + structural validation; deferred for real-host dry-run)"
+    },
+    {
+      "id": "AC3",
+      "level": "MUST",
+      "description": "wm-burst doctor hard-fails when remote rustc set does not match rust-toolchain.toml, printing exact local-vs-remote mismatch, and passes when they match — proven by a unit/integration test that feeds a mismatched toolchain pair and asserts non-zero exit with diagnostic.",
+      "test": "tests/acceptance_ac3.rs"
+    },
+    {
+      "id": "AC4",
+      "level": "MUST",
+      "description": "wm-burst build compiles a target crate with RUSTC_WRAPPER=sccache against shared cache and reports where it ran + cache hit/miss counts; a second build shows materially higher cache-hit ratio.",
+      "test": "tests/mocks/ac4.rs (mock: sccache stats reporting; deferred for real remote build)"
+    },
+    {
+      "id": "AC5",
+      "level": "MUST",
+      "description": "wm-burst exec -- <cmd> runs a non-cargo CPU job on the remote box and streams its output + exit code locally; the exit status is faithfully propagated.",
+      "test": "tests/mocks/ac5.rs (mock: exec command builder + exit-code propagation; deferred for real SSH)"
+    },
+    {
+      "id": "AC6",
+      "level": "MUST",
+      "description": "Pod tier: wm-burst pod up|down creates an ephemeral builder, runs a job, tears it down on completion/idle-timeout; full lifecycle + cost estimate appended to cost log; monthly burst-budget cap enforced (exceeding blocks new pods, no surprise bill). Provable with mocked provider.",
+      "test": "tests/acceptance_ac6.rs (mocked provider, no real spend)"
+    },
+    {
+      "id": "AC7",
+      "level": "MUST",
+      "description": "wm-burst status reports standing box load, cache hit rate, month-to-date burst spend vs cap, and last N jobs (where each ran, duration, cost).",
+      "test": "tests/acceptance_ac7.rs"
+    },
+    {
+      "id": "AC8",
+      "level": "MUST",
+      "description": "CLI hygiene: sigpipe::reset() is first line of main(), --help/--version work, MSRV 1.85, no let-chains; wm-burst status | head does not coredump.",
+      "test": "tests/acceptance_ac8.rs"
+    }
+  ],
+  "scope": [
+    "wm-burst init: write/edit ~/.config/wm-burst/config.toml with remote host, sccache endpoint+bucket, monthly budget cap, optional pod provider",
+    "wm-burst provision: generate and invoke an Ansible playbook to converge a fresh host to builder-ready",
+    "wm-burst doctor: verify remote reachability, toolchain match vs rust-toolchain.toml, sccache bucket writability, and cache hit rate",
+    "wm-burst build [-- <cargo args>]: run build with RUSTC_WRAPPER=sccache against shared cache and remote builder; stream output; report where it ran + hit/miss counts + elapsed",
+    "wm-burst exec -- <cmd>: run a non-cargo CPU job on remote box, stream output+exit-code locally",
+    "wm-burst pod up|down: ephemeral high-core/GPU pod via configured provider; auto-teardown; cost log; budget cap enforcement",
+    "wm-burst status: show standing box load, cache hit rate, month-to-date burst spend vs cap, last N jobs"
+  ],
+  "non_goals": [
+    "NATS work-queue / capability registry / fleet routing (constellation-dispatch and constellation-cloud-build own those)",
+    "Local model node management (constellation-brain-local)",
+    "Voice stack (real-time, must stay local, never bursts)",
+    "Multi-machine fleet coordination (constellation mesh layers)",
+    "Automatic hardware procurement / cloud account setup",
+    "CI/CD pipeline integration (separate PRD scope)"
+  ],
+  "hard_constraints": {
+    "rust_edition": "2024",
+    "target_kind": "cli",
+    "deny_unsafe": true,
+    "max_deps": null,
+    "msrv": "1.85",
+    "additional": {
+      "sigpipe_reset": "sigpipe::reset() must be first line of main() per self_sigpipe_panic_toolkit memory",
+      "no_let_chains": "no let-chain syntax (MSRV 1.85 does not stabilize let-chains)",
+      "crate_name": "wm-burst"
+    }
+  },
+  "five_whys_trace": [
+    {
+      "why": 1,
+      "q": "Why does the user need a cloud burst CLI?",
+      "a": "Heavy Rust compiles and wake-word retraining OOM-kill or pin all cores on a no-swap laptop, blocking day-to-day work."
+    },
+    {
+      "why": 2,
+      "q": "Why can't the existing fleet infrastructure (constellation-cloud-build) solve this today?",
+      "a": "constellation-cloud-build requires NATS mesh + JetStream work-queue + capability registry — none of which are live yet; it's gated on multiple other PRDs."
+    },
+    {
+      "why": 3,
+      "q": "Why does a no-mesh rung need a dedicated CLI rather than just a shell alias?",
+      "a": "Toolchain drift (1.85/1.88 split) has caused spurious compile failures before; a CLI can hard-fail on mismatch before silently corrupting a build. A shell alias can't enforce that guardrail."
+    },
+    {
+      "why": 4,
+      "q": "Why add pod management when a standing dedicated box already solves the main problem?",
+      "a": "Some jobs (e.g. full ML retraining with GPU) are too large even for the dedicated box; pods let the user burst to larger capacity for one-off jobs without buying permanent hardware, while the monthly cap prevents surprise bills."
+    }
+  ],
+  "ambiguities_resolved": [
+    {
+      "question": "sccache-dist vs remote-cargo-over-ssh for v0.1?",
+      "resolution": "AC4 explicitly allows either; the mock tests the reporting/stats surface, not the specific transport. Real implementation can use either path."
+    },
+    {
+      "question": "Shared-cache backend: Hetzner Object Storage vs B2 vs MinIO?",
+      "resolution": "Configurable at init time; default in config schema is MinIO on the dedicated box (cheapest for something you already pay for). The sccache endpoint is a URL so any S3-compatible backend works."
+    },
+    {
+      "question": "What is the crate binary name?",
+      "resolution": "The PRD names the binary wm-burst; the crate slug for the wintermute repo is constellation-burst-builder per the build tick. The Cargo.toml [package] name is wm-burst, [[bin]] name = 'wm-burst'."
+    }
+  ],
+  "created_at": "2026-06-05T02:48:51Z"
+}
