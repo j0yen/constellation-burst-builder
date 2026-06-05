@@ -34,7 +34,7 @@ fn exit_code_clamped_to_255() {
 #[test]
 fn exec_records_job_in_cost_log() {
     // Verify the cost log records the exec command.
-    let mut log = CostLog::default();
+    let log = CostLog::default();
     let now = Utc::now();
     let entry = JobEntry {
         job_id: format!("exec-{}", now.timestamp()),
