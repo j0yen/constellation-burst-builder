@@ -26,6 +26,17 @@ bucket = "sccache"
 [pod]
 provider = "runpod"
 idle_timeout_secs = 300
+
+[hcloud]
+provider = "hcloud"
+server_type = "ccx23"
+location = "fsn1"
+image = "ubuntu-24.04"
+ssh_key_name = "test-key"
+remote_arch = "x86_64-unknown-linux-gnu"
+sccache_endpoint = "https://fsn1.your-objectstorage.com"
+sccache_bucket = "wm-sccache"
+idle_timeout_secs = 3600
 "#
     );
     std::fs::write(&config, content).expect("write config");

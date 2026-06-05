@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 /// Top-level wm-burst configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// SSH alias or host for the dedicated builder.
+    /// SSH alias or host for the dedicated builder (legacy standing-box path).
     pub remote_host: String,
     /// sccache shared object store configuration.
     pub sccache: SccacheConfig,
@@ -17,6 +17,8 @@ pub struct Config {
     pub monthly_budget_usd: f64,
     /// Optional pod provider configuration.
     pub pod: Option<PodConfig>,
+    /// Optional Hetzner Cloud pod configuration (new hcloud provider).
+    pub hcloud: Option<HcloudPodConfig>,
 }
 
 /// sccache shared object store configuration.
@@ -44,7 +46,7 @@ impl std::fmt::Debug for SccacheConfig {
     }
 }
 
-/// Optional ephemeral pod provider configuration.
+/// Optional ephemeral pod provider configuration (legacy generic section).
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PodConfig {
     /// Provider name: `runpod`, `vast`, or `hetzner-cloud`.
@@ -63,6 +65,49 @@ impl std::fmt::Debug for PodConfig {
             .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("idle_timeout_secs", &self.idle_timeout_secs)
             .finish()
+    }
+}
+
+/// Hetzner Cloud pod configuration — drives `HcloudPodProvider`.
+///
+/// The API token is **not** stored here; it is read from `$HCLOUD_TOKEN`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HcloudPodConfig {
+    /// Must be `"hcloud"`.
+    pub provider: String,
+    /// Hetzner Cloud server type (default: `"ccx23"` — 4 dedicated vCPU, 16 GB RAM, x86 AMD).
+    pub server_type: String,
+    /// Hetzner datacenter location (default: `"fsn1"` — Falkenstein, Germany).
+    pub location: String,
+    /// Snapshot ID or image name to boot from.  When numeric, treated as a snapshot ID.
+    /// Default: `"ubuntu-24.04"` (use `wm-burst provision --snapshot` to bake a custom one).
+    pub image: String,
+    /// Name of the SSH public key already registered in your hcloud project.
+    pub ssh_key_name: String,
+    /// Target Rust triple for the pod.  Default: `"x86_64-unknown-linux-gnu"`.
+    pub remote_arch: String,
+    /// sccache S3-compatible endpoint for the persistent shared cache.
+    /// Default: Hetzner Object Storage (`https://fsn1.your-objectstorage.com`).
+    pub sccache_endpoint: String,
+    /// sccache bucket name.  Default: `"wm-sccache"`.
+    pub sccache_bucket: String,
+    /// Idle timeout in seconds before the pod is destroyed.  Default: `3600`.
+    pub idle_timeout_secs: u64,
+}
+
+impl Default for HcloudPodConfig {
+    fn default() -> Self {
+        Self {
+            provider: "hcloud".into(),
+            server_type: "ccx23".into(),
+            location: "fsn1".into(),
+            image: "ubuntu-24.04".into(),
+            ssh_key_name: String::new(),
+            remote_arch: "x86_64-unknown-linux-gnu".into(),
+            sccache_endpoint: "https://fsn1.your-objectstorage.com".into(),
+            sccache_bucket: "wm-sccache".into(),
+            idle_timeout_secs: 3600,
+        }
     }
 }
 
@@ -131,6 +176,35 @@ impl Config {
                     "pod.provider '{}' is unknown; valid values: runpod, vast, hetzner-cloud",
                     pod.provider
                 );
+            }
+        }
+        if let Some(hcfg) = &self.hcloud {
+            if hcfg.provider != "hcloud" {
+                anyhow::bail!("hcloud.provider must be \"hcloud\", got \"{}\"", hcfg.provider);
+            }
+            if hcfg.server_type.trim().is_empty() {
+                anyhow::bail!("hcloud.server_type must not be empty");
+            }
+            if hcfg.location.trim().is_empty() {
+                anyhow::bail!("hcloud.location must not be empty");
+            }
+            if hcfg.image.trim().is_empty() {
+                anyhow::bail!("hcloud.image must not be empty");
+            }
+            if hcfg.ssh_key_name.trim().is_empty() {
+                anyhow::bail!(
+                    "hcloud.ssh_key_name must not be empty; \
+                     add your SSH public key to the hcloud project and set its name here"
+                );
+            }
+            if hcfg.remote_arch.trim().is_empty() {
+                anyhow::bail!("hcloud.remote_arch must not be empty");
+            }
+            if hcfg.sccache_endpoint.trim().is_empty() {
+                anyhow::bail!("hcloud.sccache_endpoint must not be empty");
+            }
+            if hcfg.sccache_bucket.trim().is_empty() {
+                anyhow::bail!("hcloud.sccache_bucket must not be empty");
             }
         }
         Ok(())

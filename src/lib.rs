@@ -11,4 +11,5 @@
 pub mod commands;
 pub mod config;
 pub mod cost;
+pub mod provider;
 pub mod toolchain;

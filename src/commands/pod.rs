@@ -8,8 +8,9 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 
-use crate::config::Config;
+use crate::config::{Config, HcloudPodConfig};
 use crate::cost::{check_budget, CostLog, JobEntry};
+use crate::provider;
 
 /// Arguments for `wm-burst pod`.
 #[derive(Args, Debug)]
@@ -44,7 +45,7 @@ pub struct PodUpArgs {
     pub command: Vec<String>,
 
     /// Estimated cost per hour in USD for budget pre-check.
-    #[arg(long, default_value = "1.0")]
+    #[arg(long, default_value = "0.03")]
     pub estimated_cost_per_hour_usd: f64,
 
     /// Maximum job duration in seconds (pod is torn down after this).
@@ -90,16 +91,19 @@ pub fn run(args: PodArgs) -> Result<std::process::ExitCode> {
     }
 }
 
+fn hcloud_cfg_from_config(cfg: &Config) -> Result<HcloudPodConfig> {
+    cfg.hcloud.clone().context(
+        "no [hcloud] section in config; run `wm-burst init --pod-provider hcloud` \
+         or add [hcloud] manually to ~/.config/wm-burst/config.toml"
+    )
+}
+
 fn run_pod_up(
     cfg: &Config,
     args: &PodUpArgs,
     log_path: &std::path::Path,
 ) -> Result<std::process::ExitCode> {
-    let pod_cfg = cfg
-        .pod
-        .as_ref()
-        .context("pod section missing from config; add [pod] with provider = \"...\"")?;
-
+    let hcfg = hcloud_cfg_from_config(cfg)?;
     let mut log = CostLog::load(log_path).unwrap_or_default();
 
     // Budget pre-check: refuse if already over cap.
@@ -107,23 +111,25 @@ fn run_pod_up(
 
     let remote_cmd = args.command.join(" ");
     eprintln!(
-        "[pod] provider={} max_duration={}s cmd={remote_cmd}",
-        pod_cfg.provider, args.max_duration_secs
+        "[pod] provider={} server_type={} max_duration={}s cmd={remote_cmd}",
+        hcfg.provider, hcfg.server_type, args.max_duration_secs
     );
 
-    let provider = make_provider(args.mock, &pod_cfg.provider);
+    let p = provider::make_provider(args.mock, &hcfg.provider)?;
 
     let start = chrono::Utc::now();
 
     // Create pod.
-    let pod_id = provider.create_pod(pod_cfg.provider.as_str())?;
+    let pod_id = p.create_pod(&hcfg)?;
+    // Extract IP from `<id>@<ip>`.
+    let ip = pod_id.split('@').nth(1).unwrap_or("unknown").to_owned();
     eprintln!("[pod] created pod: {pod_id}");
 
     // Run job.
-    let job_result = provider.run_job(&pod_id, &remote_cmd, args.max_duration_secs);
+    let job_result = p.run_job(&pod_id, &ip, &remote_cmd, args.max_duration_secs);
 
     // Always tear down — even if the job failed.
-    let teardown_result = provider.destroy_pod(&pod_id);
+    let teardown_result = p.destroy_pod(&pod_id);
 
     let end = chrono::Utc::now();
     let elapsed_millis = (end - start).num_milliseconds();
@@ -171,61 +177,9 @@ fn run_pod_down(
     args: &PodDownArgs,
     _log_path: &std::path::Path,
 ) -> Result<std::process::ExitCode> {
-    let pod_cfg = cfg.pod.as_ref().context("pod section missing from config")?;
-    let provider = make_provider(args.mock, &pod_cfg.provider);
-    provider.destroy_pod(&args.pod_id)?;
+    let hcfg = hcloud_cfg_from_config(cfg)?;
+    let p = provider::make_provider(args.mock, &hcfg.provider)?;
+    p.destroy_pod(&args.pod_id)?;
     println!("[pod] pod {} torn down", args.pod_id);
     Ok(std::process::ExitCode::SUCCESS)
-}
-
-/// Build a pod provider: mock (for tests) or real (emits advisory that v0.1
-/// real providers are not yet implemented and falls back to mock).
-fn make_provider(use_mock: bool, provider_type: &str) -> Box<dyn PodProvider> {
-    if !use_mock {
-        eprintln!(
-            "[pod] WARN: real provider '{provider_type}' not yet implemented in v0.1; \
-             use --mock for testing or configure a real provider in a future release"
-        );
-    }
-    Box::new(MockPodProvider::new())
-}
-
-/// Abstraction over pod providers.
-trait PodProvider {
-    /// Create a pod and return its ID.
-    fn create_pod(&self, provider_type: &str) -> Result<String>;
-    /// Run a command in the pod; return when complete or timeout.
-    fn run_job(&self, pod_id: &str, cmd: &str, max_duration_secs: u64) -> Result<()>;
-    /// Destroy the pod.
-    fn destroy_pod(&self, pod_id: &str) -> Result<()>;
-}
-
-/// Mock provider for tests — no real API calls, no real spend.
-struct MockPodProvider {
-    pod_counter: std::cell::Cell<u64>,
-}
-
-impl MockPodProvider {
-    const fn new() -> Self {
-        Self { pod_counter: std::cell::Cell::new(0) }
-    }
-}
-
-impl PodProvider for MockPodProvider {
-    fn create_pod(&self, provider_type: &str) -> Result<String> {
-        let id = self.pod_counter.get() + 1;
-        self.pod_counter.set(id);
-        eprintln!("[mock-pod] created pod mock-{id} (provider={provider_type})");
-        Ok(format!("mock-{id}"))
-    }
-
-    fn run_job(&self, pod_id: &str, cmd: &str, _max_duration_secs: u64) -> Result<()> {
-        eprintln!("[mock-pod] running in {pod_id}: {cmd}");
-        Ok(())
-    }
-
-    fn destroy_pod(&self, pod_id: &str) -> Result<()> {
-        eprintln!("[mock-pod] destroyed {pod_id}");
-        Ok(())
-    }
 }

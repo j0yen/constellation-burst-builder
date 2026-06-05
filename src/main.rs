@@ -12,6 +12,7 @@ use clap::{Parser, Subcommand};
 mod commands;
 mod config;
 mod cost;
+mod provider;
 mod toolchain;
 
 /// Burst heavy Rust compiles and CPU jobs to a dedicated cloud box via ssh+sccache.
@@ -57,7 +58,7 @@ fn main() -> std::process::ExitCode {
 
 fn run(cli: Cli) -> Result<std::process::ExitCode> {
     match cli.command {
-        Commands::Init(args) => commands::init::run(args),
+        Commands::Init(args) => commands::init::run(&args),
         Commands::Provision(args) => commands::provision::run(&args),
         Commands::Doctor(args) => commands::doctor::run(&args),
         Commands::Build(args) => commands::build::run(&args),
