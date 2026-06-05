@@ -20,27 +20,50 @@ pub struct Config {
 }
 
 /// sccache shared object store configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SccacheConfig {
     /// `S3`-compatible endpoint URL (e.g. `http://builder-box:9000`).
     pub endpoint: String,
     /// Bucket name.
     pub bucket: String,
     /// `AWS_ACCESS_KEY_ID` equivalent.
+    // NOTE: access_key/secret_key excluded from Debug to avoid leaking credentials via {:?}.
     pub access_key: Option<String>,
     /// `AWS_SECRET_ACCESS_KEY` equivalent.
     pub secret_key: Option<String>,
 }
 
+impl std::fmt::Debug for SccacheConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SccacheConfig")
+            .field("endpoint", &self.endpoint)
+            .field("bucket", &self.bucket)
+            .field("access_key", &self.access_key.as_ref().map(|_| "<redacted>"))
+            .field("secret_key", &self.secret_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 /// Optional ephemeral pod provider configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PodConfig {
     /// Provider name: `runpod`, `vast`, or `hetzner-cloud`.
     pub provider: String,
     /// Provider API key (stored in config; user's responsibility to protect the file).
+    // NOTE: api_key is intentionally excluded from Debug to prevent leaking secrets via {:?}.
     pub api_key: Option<String>,
     /// Idle timeout in seconds before the pod is torn down.
     pub idle_timeout_secs: u64,
+}
+
+impl std::fmt::Debug for PodConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PodConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("idle_timeout_secs", &self.idle_timeout_secs)
+            .finish()
+    }
 }
 
 impl Config {
