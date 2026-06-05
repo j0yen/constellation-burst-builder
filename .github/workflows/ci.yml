@@ -5,6 +5,10 @@ on:
     branches: ["main", "autobuilder/**"]
   pull_request:
 
+# Minimal permissions: read-only by default.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
