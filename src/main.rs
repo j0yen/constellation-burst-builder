@@ -37,6 +37,8 @@ enum Commands {
     Exec(commands::exec::ExecArgs),
     /// Manage ephemeral burst pods (up|down).
     Pod(commands::pod::PodArgs),
+    /// Manage the permanent hub (up|down|status) — long-lived box for standing workloads.
+    Hub(commands::hub::HubArgs),
     /// Show standing box load, cache hit rate, month-to-date spend, and last N jobs.
     Status(commands::status::StatusArgs),
 }
@@ -64,6 +66,7 @@ fn run(cli: Cli) -> Result<std::process::ExitCode> {
         Commands::Build(args) => commands::build::run(&args),
         Commands::Exec(args) => commands::exec::run(&args),
         Commands::Pod(args) => commands::pod::run(args),
+        Commands::Hub(args) => commands::hub::run(args),
         Commands::Status(args) => commands::status::run(&args),
     }
 }
