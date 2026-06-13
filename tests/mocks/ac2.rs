@@ -18,6 +18,7 @@ fn test_config() -> Config {
         monthly_budget_usd: 75.0,
         pod: None,
         hcloud: None,
+        hub: None,
     }
 }
 

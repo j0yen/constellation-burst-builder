@@ -1,10 +1,110 @@
 //! Configuration file management for wm-burst.
 //!
 //! Config lives at `~/.config/wm-burst/config.toml`.
+//! Hub identity persists separately in `~/.config/wm-burst/hub.json`.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+/// Permanent hub configuration — parallel to ephemeral pod config.
+///
+/// Identity (once provisioned) is persisted in `~/.config/wm-burst/hub.json`
+/// as a `HubState`, keeping secrets out of the state file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubConfig {
+    /// Hetzner server type for the hub (default: `"cpx11"` — 2 vCPU, 2 GB RAM, x86).
+    #[serde(default = "HubConfig::default_server_type")]
+    pub server_type: String,
+    /// Hetzner datacenter location (default: `"nbg1"` — Nuremberg).
+    #[serde(default = "HubConfig::default_location")]
+    pub location: String,
+    /// Snapshot ID or image name (reuses `SNAPSHOT_ID` convention from pod).
+    #[serde(default = "HubConfig::default_image")]
+    pub image: String,
+    /// Name of the SSH public key registered in the hcloud project.
+    pub ssh_key_name: String,
+}
+
+impl HubConfig {
+    fn default_server_type() -> String { "cpx11".into() }
+    fn default_location() -> String { "nbg1".into() }
+    fn default_image() -> String { "ubuntu-24.04".into() }
+}
+
+impl Default for HubConfig {
+    fn default() -> Self {
+        Self {
+            server_type: Self::default_server_type(),
+            location: Self::default_location(),
+            image: Self::default_image(),
+            ssh_key_name: String::new(),
+        }
+    }
+}
+
+/// Persisted hub identity — written to `~/.config/wm-burst/hub.json`.
+///
+/// Non-secret: the file holds only the server ID and IP, never an API token.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HubState {
+    /// Opaque server identity in `<hcloud-id>@<ip>` format.
+    pub hub_id: String,
+}
+
+impl HubState {
+    /// Default path: `~/.config/wm-burst/hub.json`.
+    ///
+    /// # Errors
+    /// Returns an error if the home directory cannot be determined.
+    pub fn default_path() -> Result<PathBuf> {
+        let home = dirs::home_dir().context("cannot determine home directory")?;
+        Ok(home.join(".config").join("wm-burst").join("hub.json"))
+    }
+
+    /// Load hub state from `path`. Returns `None` if the file does not exist.
+    ///
+    /// # Errors
+    /// Returns an error if the file exists but cannot be parsed.
+    pub fn load(path: &Path) -> Result<Option<Self>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("cannot read hub state at {}", path.display()))?;
+        let state: Self = serde_json::from_str(&raw)
+            .with_context(|| format!("invalid hub state at {}: check JSON", path.display()))?;
+        Ok(Some(state))
+    }
+
+    /// Save hub state to `path`, creating parent directories as needed.
+    ///
+    /// # Errors
+    /// Returns an error if the directory cannot be created or the file cannot be written.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create config dir {}", parent.display()))?;
+        }
+        let raw = serde_json::to_string_pretty(self).context("cannot serialize hub state")?;
+        std::fs::write(path, raw)
+            .with_context(|| format!("cannot write hub state to {}", path.display()))
+    }
+
+    /// Remove the hub state file (called on `hub down`).
+    ///
+    /// No-op if the file does not exist.
+    ///
+    /// # Errors
+    /// Returns an error if the file exists but cannot be removed.
+    pub fn clear(path: &Path) -> Result<()> {
+        if path.exists() {
+            std::fs::remove_file(path)
+                .with_context(|| format!("cannot clear hub state at {}", path.display()))?;
+        }
+        Ok(())
+    }
+}
 
 /// Top-level wm-burst configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +119,8 @@ pub struct Config {
     pub pod: Option<PodConfig>,
     /// Optional Hetzner Cloud pod configuration (new hcloud provider).
     pub hcloud: Option<HcloudPodConfig>,
+    /// Optional permanent hub configuration (parallel to ephemeral pod).
+    pub hub: Option<HubConfig>,
 }
 
 /// sccache shared object store configuration.

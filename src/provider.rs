@@ -11,6 +11,21 @@ use anyhow::{Context, Result};
 use crate::config::HcloudPodConfig;
 
 // ---------------------------------------------------------------------------
+// ServerState
+// ---------------------------------------------------------------------------
+
+/// Live state of a server returned by [`PodProvider::get_server`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerState {
+    /// Opaque server ID (matches pod_id prefix before `@`).
+    pub id: String,
+    /// Public IPv4 address.
+    pub ip: String,
+    /// Status string from the provider (e.g. `"running"`, `"off"`, `"initializing"`).
+    pub status: String,
+}
+
+// ---------------------------------------------------------------------------
 // Trait
 // ---------------------------------------------------------------------------
 
@@ -39,6 +54,18 @@ pub trait PodProvider {
     /// Returns an error only if the destroy API call fails *and* the server may
     /// still be running (i.e. a 404 / already-gone response is treated as success).
     fn destroy_pod(&self, pod_id: &str) -> Result<()>;
+
+    /// Query a server by its numeric ID string.
+    ///
+    /// Returns `Ok(Some(state))` if the server exists, `Ok(None)` if it has been
+    /// deleted or never existed (404), and `Err` only on non-404 API/network failures.
+    ///
+    /// The `server_id` is the numeric part before `@` in the `<id>@<ip>` format
+    /// returned by `create_pod`.
+    ///
+    /// # Errors
+    /// Returns an error if the API call fails with a non-404 status.
+    fn get_server(&self, server_id: &str) -> Result<Option<ServerState>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -271,6 +298,47 @@ impl PodProvider for HcloudPodProvider {
         eprintln!("[hcloud] deleting server {server_id}");
         self.hcloud_delete(&format!("/servers/{server_id}"))
     }
+
+    fn get_server(&self, server_id: &str) -> Result<Option<ServerState>> {
+        let url = format!("https://api.hetzner.cloud/v1/servers/{server_id}");
+        let auth = self.auth_header();
+        let output = std::process::Command::new("curl")
+            .args([
+                "-sS",
+                "-X", "GET",
+                "-H", &format!("Authorization: {auth}"),
+                "-w", "\n__HTTP_STATUS__%{http_code}",
+                &url,
+            ])
+            .output()
+            .context("failed to spawn curl for hcloud GET server")?;
+
+        let raw = String::from_utf8_lossy(&output.stdout).into_owned();
+        let (body_part, status_part) = Self::split_curl_status(&raw);
+        let status: u16 = status_part.trim().parse().unwrap_or(0);
+
+        // 404 = already gone (hub was deleted externally) — not an error.
+        if status == 404 {
+            return Ok(None);
+        }
+        if !(200..300).contains(&status) {
+            anyhow::bail!(
+                "hcloud API GET /servers/{server_id} returned HTTP {status}; body: {}",
+                body_part.chars().take(400).collect::<String>()
+            );
+        }
+
+        let id = Self::json_num_field(body_part, "id")
+            .context("hcloud get_server response missing 'id'")?;
+        let ip = Self::json_str_field(body_part, "ip").unwrap_or("unknown");
+        let status_str = Self::json_str_field(body_part, "status").unwrap_or("unknown");
+
+        Ok(Some(ServerState {
+            id: id.to_string(),
+            ip: ip.to_owned(),
+            status: status_str.to_owned(),
+        }))
+    }
 }
 
 // Prevent the token from ever appearing in debug output.
@@ -287,15 +355,38 @@ impl std::fmt::Debug for HcloudPodProvider {
 // ---------------------------------------------------------------------------
 
 /// Mock provider for tests — no real API calls, no real spend.
+///
+/// Thread-local counters let tests assert call counts without `Arc<Mutex<_>>`.
 pub struct MockPodProvider {
-    pod_counter: std::cell::Cell<u64>,
+    /// Counter tracking how many times `create_pod` was called.
+    pub create_calls: std::cell::Cell<u64>,
+    /// Counter tracking how many times `destroy_pod` was called.
+    pub destroy_calls: std::cell::Cell<u64>,
+    /// When `Some`, `get_server` returns this status for any known mock server id.
+    /// When `None`, returns `Ok(None)` (server not found).
+    pub get_server_status: Option<&'static str>,
 }
 
 impl MockPodProvider {
-    /// Create a new mock provider.
+    /// Create a new mock provider with no `get_server` preset (returns `None`).
     #[must_use]
     pub const fn new() -> Self {
-        Self { pod_counter: std::cell::Cell::new(0) }
+        Self {
+            create_calls: std::cell::Cell::new(0),
+            destroy_calls: std::cell::Cell::new(0),
+            get_server_status: None,
+        }
+    }
+
+    /// Create a mock provider that will report the given status from `get_server`.
+    #[must_use]
+    #[cfg(test)]
+    pub const fn with_running_server() -> Self {
+        Self {
+            create_calls: std::cell::Cell::new(0),
+            destroy_calls: std::cell::Cell::new(0),
+            get_server_status: Some("running"),
+        }
     }
 }
 
@@ -307,8 +398,8 @@ impl Default for MockPodProvider {
 
 impl PodProvider for MockPodProvider {
     fn create_pod(&self, cfg: &HcloudPodConfig) -> Result<String> {
-        let id = self.pod_counter.get() + 1;
-        self.pod_counter.set(id);
+        let id = self.create_calls.get() + 1;
+        self.create_calls.set(id);
         eprintln!(
             "[mock-pod] created pod mock-{id} (provider=hcloud type={} loc={})",
             cfg.server_type, cfg.location
@@ -322,8 +413,31 @@ impl PodProvider for MockPodProvider {
     }
 
     fn destroy_pod(&self, pod_id: &str) -> Result<()> {
+        let n = self.destroy_calls.get() + 1;
+        self.destroy_calls.set(n);
         eprintln!("[mock-pod] destroyed {pod_id}");
         Ok(())
+    }
+
+    fn get_server(&self, server_id: &str) -> Result<Option<ServerState>> {
+        match self.get_server_status {
+            Some(status) => {
+                eprintln!("[mock-pod] get_server({server_id}) -> {status}");
+                // Derive IP from numeric suffix of mock id (mock-1 -> 192.0.2.1).
+                let numeric: u64 = server_id.strip_prefix("mock-")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+                Ok(Some(ServerState {
+                    id: server_id.to_owned(),
+                    ip: format!("192.0.2.{numeric}"),
+                    status: status.to_owned(),
+                }))
+            }
+            None => {
+                eprintln!("[mock-pod] get_server({server_id}) -> not found");
+                Ok(None)
+            }
+        }
     }
 }
 
@@ -451,6 +565,25 @@ mod tests {
             !debug_str.contains("super-secret-token"),
             "HCLOUD_TOKEN must not appear in Debug output: {debug_str}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn mock_get_server_running_returns_state() -> anyhow::Result<()> {
+        let p = MockPodProvider::with_running_server();
+        let state = p.get_server("mock-1")?;
+        assert!(state.is_some(), "expected Some(ServerState), got None");
+        let s = state.unwrap();
+        assert_eq!(s.status, "running");
+        assert_eq!(s.id, "mock-1");
+        Ok(())
+    }
+
+    #[test]
+    fn mock_get_server_none_returns_not_found() -> anyhow::Result<()> {
+        let p = MockPodProvider::new(); // no get_server_status set
+        let state = p.get_server("mock-99")?;
+        assert!(state.is_none(), "expected None (not found), got Some");
         Ok(())
     }
 }

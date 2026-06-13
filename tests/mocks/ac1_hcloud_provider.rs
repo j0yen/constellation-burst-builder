@@ -34,6 +34,7 @@ fn test_config_with_hcloud() -> Config {
         monthly_budget_usd: 20.0,
         pod: None,
         hcloud: Some(test_hcloud_cfg()),
+        hub: None,
     }
 }
 

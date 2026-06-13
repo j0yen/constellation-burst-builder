@@ -142,6 +142,7 @@ pub fn run(args: &InitArgs) -> Result<std::process::ExitCode> {
             monthly_budget_usd: args.monthly_budget_usd,
             pod,
             hcloud: None,
+            hub: None,
         };
         patch_hcloud(&mut cfg, args);
         cfg
