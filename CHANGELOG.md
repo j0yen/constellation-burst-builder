@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.4.0 — 2026-06-13
+
+Add `wm-burst cost` subcommand (harbor-thrift): separates burst pod spend from hub
+standing charge, projects month-end spend, warns on over-cap, and supports `--json`
+output. Extends `src/cost.rs` with `HubEntry`, `CostReport`, `parse_hub_entries`,
+and `compute_cost_report` (injected `now` for deterministic tests). All 8 ACs
+verified: 29 unit tests + acceptance tests green, MSRV 1.85.
+
 ## v0.3.0 — 2026-06-13
 
 Add permanent hub lifecycle to wm-burst: hub up|down|status with HubConfig, HubState (hub.json), get_server trait method, idempotent up, guarded down, and HUB-UP/HUB-DOWN cost.log entries
