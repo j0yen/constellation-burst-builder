@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.3.0 — 2026-06-13
+
+Add permanent hub lifecycle to wm-burst: hub up|down|status with HubConfig, HubState (hub.json), get_server trait method, idempotent up, guarded down, and HUB-UP/HUB-DOWN cost.log entries
+
 ## v0.2.0 — 2026-06-05
 
 Implements the real Hetzner Cloud x86 pod provider (`HcloudPodProvider`) behind the
