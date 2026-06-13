@@ -69,6 +69,64 @@ extra. Fine until builds are frequent.)
 - **Distributed (later):** sccache-dist so local `cargo` offloads `rustc` invocations
   transparently — that's the end-state the constellation-cloud-build PRD covers.
 
+## 5b. Shared sccache cache via hub MinIO (recommended)
+
+The scripts in `scripts/` automate standing up a **persistent MinIO/S3-compatible
+cache** on the hub so burst pods hit a warm cache instead of an empty one on every
+cold start.
+
+### Standing up the backend (run once on the hub as root)
+
+```sh
+# On the hub (ssh root@<hub-IP>):
+scripts/harbor-cache-up.sh [--bind-addr <mesh-IP>]
+# Installs MinIO as a systemd unit, creates the `wm-sccache` bucket,
+# generates an access keypair, and writes ~/.config/wm-burst/cache.env.
+```
+
+Re-running is idempotent — it detects a live MinIO and reconciles only.
+
+Dry-run (no hub needed, safe to run locally):
+```sh
+scripts/harbor-cache-up.sh --dry-run
+```
+
+### Emitting client env vars (laptop + burst pods)
+
+```sh
+# Requires ~/.config/wm-burst/hub.json (written by `wm-burst hub up`).
+eval "$(scripts/harbor-cache-client-env.sh)"
+# Now cargo/rustc uses the shared cache:
+cargo build --release
+```
+
+The script reads the hub endpoint from `hub.json` and keys from
+`~/.config/wm-burst/cache.env` (chmod 600, gitignored). No secrets are ever
+emitted to tracked files.
+
+### Verifying the setup (offline, no hub required)
+
+```sh
+scripts/harbor-cache-check.sh
+```
+
+Runs all acceptance checks: dry-run correctness, idempotency, required env vars,
+hub.json wiring, secret isolation, and bucket-name consistency with `config.rs`.
+
+### ARM-vs-x86 hub caveat
+
+MinIO binaries are architecture-specific. `harbor-cache-up.sh` downloads the
+`linux-amd64` build — if the hub is ARM64 (e.g. Ampere/Graviton), replace the
+MinIO download URL with the `linux-arm64` variant:
+
+```
+https://dl.min.io/server/minio/release/linux-arm64/minio
+https://dl.min.io/client/mc/release/linux-arm64/mc
+```
+
+The sccache client (`SCCACHE_ENDPOINT`) is architecture-neutral — laptop (x86_64)
+and burst pods (any arch) can share the same MinIO backend.
+
 ## 6. Snapshot, then destroy when idle
 Once provisioned, take a **snapshot** (console → server → Snapshots) so future boxes
 boot ready in ~30s. Then **delete the server** when you're done building — you stop
