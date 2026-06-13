@@ -41,6 +41,8 @@ enum Commands {
     Hub(commands::hub::HubArgs),
     /// Show standing box load, cache hit rate, month-to-date spend, and last N jobs.
     Status(commands::status::StatusArgs),
+    /// Show cost breakdown: burst spend, hub standing charge, month-to-date, and projection.
+    Cost(commands::cost::CostArgs),
 }
 
 fn main() -> std::process::ExitCode {
@@ -68,5 +70,6 @@ fn run(cli: Cli) -> Result<std::process::ExitCode> {
         Commands::Pod(args) => commands::pod::run(args),
         Commands::Hub(args) => commands::hub::run(args),
         Commands::Status(args) => commands::status::run(&args),
+        Commands::Cost(args) => commands::cost::run(&args),
     }
 }
