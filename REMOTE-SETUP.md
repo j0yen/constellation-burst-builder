@@ -132,6 +132,60 @@ Once provisioned, take a **snapshot** (console → server → Snapshots) so futu
 boot ready in ~30s. Then **delete the server** when you're done building — you stop
 paying immediately; recreate from the snapshot next time.
 
+## harbor-bridge — NATS landing pad for the constellation bus
+
+> **Scope boundary:** `harbor-bridge` stands up a **NATS server + hub heartbeat
+> publisher** on the permanent hub. It is the *landing pad* — the endpoint the
+> `constellation-bus` PRD (the full agorabus↔NATS bridge) will connect to. It does
+> **NOT** build that bridge; it only makes the hub observable and reachable over NATS.
+
+The three scripts under `scripts/harbor-bridge-*.sh` implement this:
+
+| Script | Purpose |
+|---|---|
+| `harbor-bridge-up.sh` | Installs nats-server + harbor-heartbeat systemd units on hub |
+| `harbor-bridge-probe.sh` | Laptop-side: subscribes briefly and reports hub up/stale/down |
+| `harbor-bridge-check.sh` | Offline acceptance gate (no hub needed) |
+
+### Hub subjects emitted
+
+- `wm.fleet.hub.up` — published once at heartbeat start
+- `wm.fleet.hub.heartbeat` — periodic `{id, type, ip, ts}` JSON every 30 s
+- `wm.fleet.hub.down` — published by systemd `ExecStop` on graceful shutdown
+
+These exact subjects are the contract consumed by `constellation-status` and
+`constellation-hub-failover`. Do not rename them.
+
+### Quick start
+
+```sh
+# Dry-run — prints planned units and sample payload, touches nothing
+scripts/harbor-bridge-up.sh --dry-run
+
+# Deploy to the hub (reads hub.json for IP; token → ~/.config/wm-burst/bridge.env)
+scripts/harbor-bridge-up.sh --hub-ip <IP>
+
+# Check from the laptop whether the hub is live
+scripts/harbor-bridge-probe.sh --dry-run   # explain only (no connection)
+scripts/harbor-bridge-probe.sh             # live probe
+
+# Offline acceptance gate
+scripts/harbor-bridge-check.sh
+```
+
+### hub.json format
+
+Create `hub.json` at the repo root (gitignored):
+```json
+{"id": "hub1", "type": "hub", "ip": "<PUBLIC-OR-MESH-IP>", "nats_port": 4222, "ssh_user": "root"}
+```
+
+### Secret store
+
+The NATS auth token lives **only** at `~/.config/wm-burst/bridge.env` (chmod 600,
+gitignored). It is never written to any tracked file. Re-running `harbor-bridge-up.sh`
+reuses the existing token (idempotent).
+
 ## 7. When `wm-burst` hcloud provider ships
 PRD-constellation-burst-builder-hcloud automates 2–6:
 ```sh
