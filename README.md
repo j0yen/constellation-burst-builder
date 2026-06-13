@@ -50,6 +50,35 @@ wm-burst build             # cargo build routed through sccache on the remote
 wm-burst status            # load / cache / spend summary
 ```
 
+## Git mirror (in-DC clone + WIP backup)
+
+The hub holds a **bare git mirror** of all `~/wintermute/` repos.  Burst pods clone
+from this mirror over the private Hetzner network instead of hitting `github.com` on
+every build — faster and removes a GitHub-availability dependency from the build path.
+
+The same mirror serves as a **WIP backup remote**.  Any committed work that hasn't
+reached GitHub (self-review regularly surfaces 20+ "dirty" repos) can be pushed here
+with a single command.  This is **not a GitHub push** — safe for branches that are
+not yet ready to be public.
+
+### Setup
+
+```sh
+# On the hub — one-time setup (idempotent)
+scripts/harbor-mirror-up.sh --dry-run   # preview planned seeds
+scripts/harbor-mirror-up.sh             # create git user + bare repos + git-daemon
+
+# On the laptop — add hub remote + mirror push
+scripts/harbor-mirror-sync.sh --dry-run # preview: shows 'git remote add hub …', never set-url origin
+scripts/harbor-mirror-sync.sh           # back up all committed refs to hub
+```
+
+Repos with uncommitted changes are **noted** but not blocked — committed refs are
+still mirrored.  The dry-run output calls out any dirty repos so you can commit
+before syncing if you want the latest included.
+
+Run `scripts/harbor-mirror-check.sh` to validate the scripts offline (no hub needed).
+
 ## Part of the wintermute constellation fleet
 
 `wm-burst` is the mesh-free on-ramp beneath
